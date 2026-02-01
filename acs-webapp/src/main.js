@@ -1,7 +1,8 @@
 import {
   CallClient,
   LocalVideoStream,
-  VideoStreamRenderer
+  VideoStreamRenderer,
+  Features
 } from "@azure/communication-calling";
 
 import { AzureCommunicationTokenCredential } from "@azure/communication-common";
@@ -57,7 +58,7 @@ joinBtn.onclick = async () => {
     const tokenCredential = new AzureCommunicationTokenCredential(token);
 
     callAgent = await callClient.createCallAgent(tokenCredential, {
-      displayName: "Pi Video Test"
+      displayName: "MedView"
     });
 
     const deviceManager = await callClient.getDeviceManager();
@@ -79,6 +80,60 @@ joinBtn.onclick = async () => {
       videoOptions: {
         localVideoStreams: [localVideoStream]
       }
+    });
+    // Media quality statistics
+    const mediaStatsFeature = call.feature(Features.MediaStats); // :contentReference[oaicite:3]{index=3}
+
+    // summaryReported interval = aggregationInterval * dataPointsPerAggregation (seconds) :contentReference[oaicite:4]{index=4}
+    const mediaStatsCollectorOptions = {
+      aggregationInterval: 15,
+      dataPointsPerAggregation: 1
+    };
+
+    const mediaStatsCollector = mediaStatsFeature.createCollector(mediaStatsCollectorOptions); // :contentReference[oaicite:5]{index=5}
+
+    // Fires every second (too frequent for your test, but useful for UI) :contentReference[oaicite:6]{index=6}
+    mediaStatsCollector.on("sampleReported", (sample) => {
+      // console.log("sample (1s)", sample);
+    });
+
+    // Fires every 15 seconds with aggregated datapoints :contentReference[oaicite:7]{index=7}
+    mediaStatsCollector.on("summaryReported", (summary) => {
+
+      const videoSend = summary.video?.send?.[0];
+      if (!videoSend) return;
+
+      // Helper to safely extract aggregated values
+      const aggAvg = (metric) => {
+        const sum = metric?.aggregation?.sum?.[0];
+        const count = metric?.aggregation?.count?.[0];
+        return (sum != null && count > 0) ? sum / count : null;
+      };
+      const fpsFromRaw = (rawArray) => {
+        if (!Array.isArray(rawArray) || rawArray.length < 2) return null;
+
+        const totalFrames = rawArray[rawArray.length - 1] - rawArray[0];
+        const totalSeconds = rawArray.length - 1;
+
+        return totalFrames / totalSeconds;
+      };
+
+      const sendMetrics = {
+        bitrateMbps: aggAvg(videoSend.bitrate) / 1000000,
+        fps: fpsFromRaw(videoSend.framesSent.raw),
+        packetsSentPerSecond: aggAvg(videoSend.packetsPerSecond),
+        packetsLostPerSecond: aggAvg(videoSend.packetsLostPerSecond),
+        rttMs: aggAvg(videoSend.rttInMs),
+        resolution: {
+          width: aggAvg(videoSend.frameWidthSent),
+          height: aggAvg(videoSend.frameHeightSent)
+        }
+      };
+
+      console.log("📤 SEND VIDEO (15s aggregated)");
+      console.log(sendMetrics);
+      console.log("────────────");
+
     });
 
     hangupBtn.disabled = false;
