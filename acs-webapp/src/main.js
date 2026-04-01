@@ -10,6 +10,9 @@ import { AzureCommunicationTokenCredential } from "@azure/communication-common";
 // ✅ Put your Teams meeting link here:
 const MEETING_LINK = "https://teams.microsoft.com/meet/26187222018199?p=nbgNsxjYdJz9q1MvIB";
 
+// ✅ Put your MediaMTX WHEP endpoint here (e.g. http://<host>:8889/<stream-name>/whep):
+const WHEP_URL = "http://localhost:8889/cam/whep";
+
 let callAgent;
 let callClient;
 let call;
@@ -34,11 +37,52 @@ async function fetchToken() {
   return await res.json(); // { userId, token, expiresOn }
 }
 
-async function startLocalVideo(deviceManager) {
-  const cameras = await deviceManager.getCameras();
-  if (!cameras.length) throw new Error("No cameras found.");
+async function getWhepStream() {
+  const pc = new RTCPeerConnection({
+    iceServers: [{ urls: "stun:stun.l.google.com:19302" }]
+  });
 
-  localVideoStream = new LocalVideoStream(cameras[0]);
+  pc.addTransceiver("video", { direction: "recvonly" });
+
+  const offer = await pc.createOffer();
+  await pc.setLocalDescription(offer);
+
+  // Wait for ICE gathering to complete before sending the offer
+  await new Promise((resolve) => {
+    if (pc.iceGatheringState === "complete") {
+      resolve();
+    } else {
+      pc.addEventListener("icegatheringstatechange", () => {
+        if (pc.iceGatheringState === "complete") resolve();
+      });
+    }
+  });
+
+  const res = await fetch(WHEP_URL, {
+    method: "POST",
+    headers: { "Content-Type": "application/sdp" },
+    body: pc.localDescription.sdp
+  });
+
+  if (!res.ok) throw new Error(`WHEP connection failed: ${res.status}`);
+
+  const answerSdp = await res.text();
+  await pc.setRemoteDescription({ type: "answer", sdp: answerSdp });
+
+  // Wait for the remote video track to arrive
+  return new Promise((resolve, reject) => {
+    const timeout = setTimeout(() => reject(new Error("Timed out waiting for WHEP video track")), 10000);
+    pc.ontrack = (event) => {
+      if (event.track.kind === "video") {
+        clearTimeout(timeout);
+        resolve(new MediaStream([event.track]));
+      }
+    };
+  });
+}
+
+async function startLocalVideo(mediaStream) {
+  localVideoStream = new LocalVideoStream(mediaStream);
   localVideoRenderer = new VideoStreamRenderer(localVideoStream);
 
   localVideoView = await localVideoRenderer.createView();
@@ -46,9 +90,9 @@ async function startLocalVideo(deviceManager) {
   localVideoContainer.appendChild(localVideoView.target);
 }
 
-joinBtn.onclick = async () => {
+async function joinCall() {
   try {
-    joinBtn.disabled = true;
+    if (joinBtn) joinBtn.disabled = true;
     setStatus("Fetching token...");
 
     const { token } = await fetchToken();
@@ -61,14 +105,11 @@ joinBtn.onclick = async () => {
       displayName: "MedView"
     });
 
-    const deviceManager = await callClient.getDeviceManager();
-
-    // Ask only for video permission (audio false)
-    setStatus("Requesting camera permission...");
-    await deviceManager.askDevicePermission({ video: true, audio: false });
+    setStatus("Connecting to WHEP stream...");
+    const mediaStream = await getWhepStream();
 
     setStatus("Starting local video...");
-    await startLocalVideo(deviceManager);
+    await startLocalVideo(mediaStream);
 
     // Join Teams meeting by link:
     // Docs: locator = { meetingLink: '<MEETING_LINK>' }; callAgent.join(locator);
@@ -78,7 +119,13 @@ joinBtn.onclick = async () => {
 
     call = callAgent.join(locator, {
       videoOptions: {
-        localVideoStreams: [localVideoStream]
+        localVideoStreams: [localVideoStream],
+        constraints: {
+          send:{
+            frameHeight: {}
+
+          }
+        }
       }
     });
     // Media quality statistics
@@ -141,9 +188,9 @@ joinBtn.onclick = async () => {
   } catch (err) {
     console.error(err);
     setStatus(`Error: ${err.message}`);
-    joinBtn.disabled = false;
+    if (joinBtn) joinBtn.disabled = false;
   }
-};
+}
 
 hangupBtn.onclick = async () => {
   try {
@@ -169,3 +216,8 @@ hangupBtn.onclick = async () => {
     hangupBtn.disabled = false;
   }
 };
+
+window.addEventListener("load", async () => {
+  console.log("Page loaded — auto joining...");
+  await joinCall();
+});
