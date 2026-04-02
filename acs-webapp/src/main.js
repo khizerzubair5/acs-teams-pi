@@ -67,10 +67,9 @@ async function getWhepStream() {
   if (!res.ok) throw new Error(`WHEP connection failed: ${res.status}`);
 
   const answerSdp = await res.text();
-  await pc.setRemoteDescription({ type: "answer", sdp: answerSdp });
 
-  // Wait for the remote video track to arrive
-  return new Promise((resolve, reject) => {
+  // Set up ontrack before setRemoteDescription to avoid missing the event
+  const trackPromise = new Promise((resolve, reject) => {
     const timeout = setTimeout(() => reject(new Error("Timed out waiting for WHEP video track")), 10000);
     pc.ontrack = (event) => {
       if (event.track.kind === "video") {
@@ -79,6 +78,10 @@ async function getWhepStream() {
       }
     };
   });
+
+  await pc.setRemoteDescription({ type: "answer", sdp: answerSdp });
+
+  return trackPromise;
 }
 
 async function startLocalVideo(mediaStream) {
