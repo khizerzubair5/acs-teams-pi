@@ -84,8 +84,21 @@ async function getWhepStream() {
   return trackPromise;
 }
 
+async function relayStreamThroughVideo(mediaStream) {
+  const videoEl = document.createElement("video");
+  videoEl.srcObject = mediaStream;
+  videoEl.muted = true;
+  videoEl.autoplay = true;
+  videoEl.playsInline = true;
+  videoEl.style.display = "none";
+  document.body.appendChild(videoEl);
+  await videoEl.play();
+  return videoEl.captureStream();
+}
+
 async function startLocalVideo(mediaStream) {
-  localVideoStream = new LocalVideoStream(mediaStream);
+  const capturedStream = await relayStreamThroughVideo(mediaStream);
+  localVideoStream = new LocalVideoStream(capturedStream);
   localVideoRenderer = new VideoStreamRenderer(localVideoStream);
 
   localVideoView = await localVideoRenderer.createView();
