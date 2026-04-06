@@ -34,11 +34,48 @@ async function fetchToken() {
   return await res.json(); // { userId, token, expiresOn }
 }
 
-async function startLocalVideo(deviceManager) {
-  const cameras = await deviceManager.getCameras();
-  if (!cameras.length) throw new Error("No cameras found.");
+// ── NEW: Pull the WHEP stream from MediaMTX ──────────────────────────────────
+async function getWhepStream() {
+  const pc = new RTCPeerConnection();
+  const stream = new MediaStream();
 
-  localVideoStream = new LocalVideoStream(cameras[0]);
+  const trackPromise = new Promise((resolve) => {
+    pc.ontrack = (event) => {
+      console.log("✅ Track received:", event.track.kind);
+      stream.addTrack(event.track);
+      resolve();
+    };
+  });
+
+  pc.addTransceiver('video', { direction: 'recvonly' });
+
+  const offer = await pc.createOffer();
+  await pc.setLocalDescription(offer);
+
+  const response = await fetch('http://localhost:8889/cam/whep', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/sdp' },
+    body: offer.sdp
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`WHEP failed: ${response.status} — ${errorText}`);
+  }
+
+  const answer = await response.text();
+  await pc.setRemoteDescription({ type: 'answer', sdp: answer });
+
+  await trackPromise;
+  return stream;
+}
+
+// ── UPDATED: Uses WHEP stream instead of physical camera ─────────────────────
+async function startLocalVideo() {
+  setStatus("Getting WHEP stream...");
+  const whepStream = await getWhepStream();
+
+  localVideoStream = new LocalVideoStream(whepStream);
   localVideoRenderer = new VideoStreamRenderer(localVideoStream);
 
   localVideoView = await localVideoRenderer.createView();
@@ -61,17 +98,10 @@ async function joinCall() {
       displayName: "MedView"
     });
 
-    const deviceManager = await callClient.getDeviceManager();
-
-    // Ask only for video permission (audio false)
-    setStatus("Requesting camera permission...");
-    await deviceManager.askDevicePermission({ video: true, audio: false });
-
+// ── deviceManager block removed ──────────────────────────────────────────
     setStatus("Starting local video...");
-    await startLocalVideo(deviceManager);
+    await startLocalVideo();
 
-    // Join Teams meeting by link:
-    // Docs: locator = { meetingLink: '<MEETING_LINK>' }; callAgent.join(locator);
     setStatus("Joining Teams meeting...");
     const locator = { meetingLink: MEETING_LINK };
 
@@ -79,14 +109,14 @@ async function joinCall() {
       videoOptions: {
         localVideoStreams: [localVideoStream],
         constraints: {
-          send:{
+          send: {
             frameHeight: {}
-
           }
         }
       }
     });
-    // Media quality statistics
+
+    // Media quality statistics----------------------
     const mediaStatsFeature = call.feature(Features.MediaStats);
 
     // summaryReported interval = aggregationInterval * dataPointsPerAggregation (seconds)
@@ -179,3 +209,4 @@ window.addEventListener("load", async () => {
   console.log("Page loaded — auto joining...");
   await joinCall();
 });
+
