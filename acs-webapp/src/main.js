@@ -10,9 +10,6 @@ import { AzureCommunicationTokenCredential } from "@azure/communication-common";
 // ✅ Put your Teams meeting link here:
 const MEETING_LINK = "https://teams.microsoft.com/meet/26187222018199?p=nbgNsxjYdJz9q1MvIB";
 
-// ✅ Put your MediaMTX WHEP endpoint here (e.g. http://<host>:8889/<stream-name>/whep):
-const WHEP_URL = "http://localhost:8889/cam/whep";
-
 let callAgent;
 let callClient;
 let call;
@@ -37,52 +34,48 @@ async function fetchToken() {
   return await res.json(); // { userId, token, expiresOn }
 }
 
+// ── NEW: Pull the WHEP stream from MediaMTX ──────────────────────────────────
 async function getWhepStream() {
-  const pc = new RTCPeerConnection({
-    iceServers: [{ urls: "stun:stun.l.google.com:19302" }]
+  const pc = new RTCPeerConnection();
+  const stream = new MediaStream();
+
+  const trackPromise = new Promise((resolve) => {
+    pc.ontrack = (event) => {
+      console.log("✅ Track received:", event.track.kind);
+      stream.addTrack(event.track);
+      resolve();
+    };
   });
 
-  pc.addTransceiver("video", { direction: "recvonly" });
+  pc.addTransceiver('video', { direction: 'recvonly' });
 
   const offer = await pc.createOffer();
   await pc.setLocalDescription(offer);
 
-  // Wait for ICE gathering to complete before sending the offer
-  await new Promise((resolve) => {
-    if (pc.iceGatheringState === "complete") {
-      resolve();
-    } else {
-      pc.addEventListener("icegatheringstatechange", () => {
-        if (pc.iceGatheringState === "complete") resolve();
-      });
-    }
+  const response = await fetch('http://localhost:8889/cam/whep', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/sdp' },
+    body: offer.sdp
   });
 
-  const res = await fetch(WHEP_URL, {
-    method: "POST",
-    headers: { "Content-Type": "application/sdp" },
-    body: pc.localDescription.sdp
-  });
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`WHEP failed: ${response.status} — ${errorText}`);
+  }
 
-  if (!res.ok) throw new Error(`WHEP connection failed: ${res.status}`);
+  const answer = await response.text();
+  await pc.setRemoteDescription({ type: 'answer', sdp: answer });
 
-  const answerSdp = await res.text();
-  await pc.setRemoteDescription({ type: "answer", sdp: answerSdp });
-
-  // Wait for the remote video track to arrive
-  return new Promise((resolve, reject) => {
-    const timeout = setTimeout(() => reject(new Error("Timed out waiting for WHEP video track")), 10000);
-    pc.ontrack = (event) => {
-      if (event.track.kind === "video") {
-        clearTimeout(timeout);
-        resolve(new MediaStream([event.track]));
-      }
-    };
-  });
+  await trackPromise;
+  return stream;
 }
 
-async function startLocalVideo(mediaStream) {
-  localVideoStream = new LocalVideoStream(mediaStream);
+// ── UPDATED: Uses WHEP stream instead of physical camera ─────────────────────
+async function startLocalVideo() {
+  setStatus("Getting WHEP stream...");
+  const whepStream = await getWhepStream();
+
+  localVideoStream = new LocalVideoStream(whepStream);
   localVideoRenderer = new VideoStreamRenderer(localVideoStream);
 
   localVideoView = await localVideoRenderer.createView();
@@ -105,15 +98,10 @@ async function joinCall() {
       displayName: "MedView"
     });
 
-    setStatus("Connecting to WHEP stream...");
-    const mediaStream = await getWhepStream();
-
+// ── deviceManager block removed ──────────────────────────────────────────
     setStatus("Starting local video...");
-    await startLocalVideo(mediaStream);
+    await startLocalVideo();
 
-    // Join Teams meeting by link:
-    // Docs: locator = { meetingLink: '<MEETING_LINK>' }; callAgent.join(locator);
-    // :contentReference[oaicite:2]{index=2}
     setStatus("Joining Teams meeting...");
     const locator = { meetingLink: MEETING_LINK };
 
@@ -121,30 +109,51 @@ async function joinCall() {
       videoOptions: {
         localVideoStreams: [localVideoStream],
         constraints: {
-          send:{
+          send: {
             frameHeight: {}
-
           }
         }
       }
     });
-    // Media quality statistics
-    const mediaStatsFeature = call.feature(Features.MediaStats); // :contentReference[oaicite:3]{index=3}
+    // ── Diagnostics ──────────────────────────────────────────────────────────────
+    call.on('stateChanged', () => {
+      console.log('📞 CALL STATE:', call.state);
 
-    // summaryReported interval = aggregationInterval * dataPointsPerAggregation (seconds) :contentReference[oaicite:4]{index=4}
+      if (call.state === 'Disconnected') {
+        console.log('❌ DISCONNECT REASON:', call.callEndReason);
+        console.log('❌ DISCONNECT CODE:', call.callEndReason?.code);
+        console.log('❌ DISCONNECT SUBCODE:', call.callEndReason?.subCode);
+      }
+    });
+
+    const ufdFeature = call.feature(Features.UserFacingDiagnostics);
+
+    ufdFeature.media.on('diagnosticChanged', (diagnostic) => {
+      console.log('🔴 MEDIA DIAGNOSTIC:', diagnostic.diagnostic, '| Value:', diagnostic.value, '| Type:', diagnostic.valueType);
+    });
+
+    ufdFeature.network.on('diagnosticChanged', (diagnostic) => {
+      console.log('🔴 NETWORK DIAGNOSTIC:', diagnostic.diagnostic, '| Value:', diagnostic.value, '| Type:', diagnostic.valueType);
+    });
+// ─────────────────────────────────────────────────────────────────────────────
+
+    // Media quality statistics----------------------
+    const mediaStatsFeature = call.feature(Features.MediaStats);
+
+    // summaryReported interval = aggregationInterval * dataPointsPerAggregation (seconds)
     const mediaStatsCollectorOptions = {
       aggregationInterval: 15,
       dataPointsPerAggregation: 1
     };
 
-    const mediaStatsCollector = mediaStatsFeature.createCollector(mediaStatsCollectorOptions); // :contentReference[oaicite:5]{index=5}
+    const mediaStatsCollector = mediaStatsFeature.createCollector(mediaStatsCollectorOptions);
 
-    // Fires every second (too frequent for your test, but useful for UI) :contentReference[oaicite:6]{index=6}
+    // Fires every second (too frequent for your test, but useful for UI)
     mediaStatsCollector.on("sampleReported", (sample) => {
       // console.log("sample (1s)", sample);
     });
 
-    // Fires every 15 seconds with aggregated datapoints :contentReference[oaicite:7]{index=7}
+    // Fires every 15 seconds with aggregated datapoints
     mediaStatsCollector.on("summaryReported", (summary) => {
 
       const videoSend = summary.video?.send?.[0];
@@ -218,6 +227,33 @@ hangupBtn.onclick = async () => {
 };
 
 window.addEventListener("load", async () => {
-  console.log("Page loaded — auto joining...");
-  await joinCall();
+  try {
+    const stream = await getWhepStream();
+    console.log("✅ WHEP stream obtained");
+    console.log("Tracks:", stream.getTracks());
+
+    const testVideo = document.createElement('video');
+    testVideo.srcObject = stream;
+    testVideo.autoplay = true;
+    testVideo.muted = true;
+    testVideo.style.width = '320px';
+    testVideo.style.border = '2px solid green';
+    document.body.appendChild(testVideo);
+
+    console.log("✅ Video element added");
+  } catch (err) {
+    console.error("❌ WHEP failed:", err.message);
+  }
 });
+
+/*// REPLACE with this:
+joinBtn.onclick = async () => {
+  await joinCall();
+};
+
+window.addEventListener("load", async () => {
+  // Simulate user interaction to satisfy autoplay policy
+  document.body.click();
+  await joinCall();
+});*/
+
