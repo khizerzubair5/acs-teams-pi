@@ -75,12 +75,23 @@ async function startLocalVideo() {
   setStatus("Getting WHEP stream...");
   const whepStream = await getWhepStream();
 
+  console.log("✅ WHEP stream obtained");
+  console.log("Stream active:", whepStream.active);
+  console.log("Video tracks:", whepStream.getVideoTracks());
+  console.log("Track state:", whepStream.getVideoTracks()[0]?.readyState);
+
   localVideoStream = new LocalVideoStream(whepStream);
+  console.log("✅ LocalVideoStream created:", localVideoStream);
+
   localVideoRenderer = new VideoStreamRenderer(localVideoStream);
+  console.log("✅ VideoStreamRenderer created");
 
   localVideoView = await localVideoRenderer.createView();
+  console.log("✅ View created");
+
   localVideoContainer.innerHTML = "";
   localVideoContainer.appendChild(localVideoView.target);
+  console.log("✅ View appended to container");
 }
 
 async function joinCall() {
@@ -226,7 +237,9 @@ hangupBtn.onclick = async () => {
   }
 };
 
-window.addEventListener("load", async () => {
+
+
+/*window.addEventListener("load", async () => {
   try {
     const stream = await getWhepStream();
     console.log("✅ WHEP stream obtained");
@@ -244,14 +257,14 @@ window.addEventListener("load", async () => {
   } catch (err) {
     console.error("❌ WHEP failed:", err.message);
   }
-});
+});*/
 
-/*// REPLACE with this:
+// REPLACE with this:
 joinBtn.onclick = async () => {
   await joinCall();
 };
 
-window.addEventListener("load", async () => {
+/*window.addEventListener("load", async () => {
   // Simulate user interaction to satisfy autoplay policy
   document.body.click();
   await joinCall();
