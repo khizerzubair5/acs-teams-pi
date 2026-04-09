@@ -115,6 +115,27 @@ async function joinCall() {
         }
       }
     });
+    // ── Diagnostics ──────────────────────────────────────────────────────────────
+    call.on('stateChanged', () => {
+      console.log('📞 CALL STATE:', call.state);
+
+      if (call.state === 'Disconnected') {
+        console.log('❌ DISCONNECT REASON:', call.callEndReason);
+        console.log('❌ DISCONNECT CODE:', call.callEndReason?.code);
+        console.log('❌ DISCONNECT SUBCODE:', call.callEndReason?.subCode);
+      }
+    });
+
+    const ufdFeature = call.feature(Features.UserFacingDiagnostics);
+
+    ufdFeature.media.on('diagnosticChanged', (diagnostic) => {
+      console.log('🔴 MEDIA DIAGNOSTIC:', diagnostic.diagnostic, '| Value:', diagnostic.value, '| Type:', diagnostic.valueType);
+    });
+
+    ufdFeature.network.on('diagnosticChanged', (diagnostic) => {
+      console.log('🔴 NETWORK DIAGNOSTIC:', diagnostic.diagnostic, '| Value:', diagnostic.value, '| Type:', diagnostic.valueType);
+    });
+// ─────────────────────────────────────────────────────────────────────────────
 
     // Media quality statistics----------------------
     const mediaStatsFeature = call.feature(Features.MediaStats);
@@ -206,7 +227,33 @@ hangupBtn.onclick = async () => {
 };
 
 window.addEventListener("load", async () => {
-  console.log("Page loaded — auto joining...");
-  await joinCall();
+  try {
+    const stream = await getWhepStream();
+    console.log("✅ WHEP stream obtained");
+    console.log("Tracks:", stream.getTracks());
+
+    const testVideo = document.createElement('video');
+    testVideo.srcObject = stream;
+    testVideo.autoplay = true;
+    testVideo.muted = true;
+    testVideo.style.width = '320px';
+    testVideo.style.border = '2px solid green';
+    document.body.appendChild(testVideo);
+
+    console.log("✅ Video element added");
+  } catch (err) {
+    console.error("❌ WHEP failed:", err.message);
+  }
 });
+
+/*// REPLACE with this:
+joinBtn.onclick = async () => {
+  await joinCall();
+};
+
+window.addEventListener("load", async () => {
+  // Simulate user interaction to satisfy autoplay policy
+  document.body.click();
+  await joinCall();
+});*/
 
