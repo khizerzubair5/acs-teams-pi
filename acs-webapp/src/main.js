@@ -70,6 +70,33 @@ async function getWhepStream() {
   return stream;
 }
 
+async function waitForStream() {
+  console.log("Waiting for stream to be available...");
+  
+  while (true) {
+    try {
+      const response = await fetch('http://localhost:8889/cam/whep', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/sdp' },
+        body: ''
+      });
+
+      // MediaMTX returns 400 when stream exists but SDP is empty
+      // MediaMTX returns 404 when stream does not exist yet
+      if (response.status === 400) {
+        console.log("✅ Stream is available, proceeding...");
+        return; // stream is ready
+      }
+
+      console.log("Stream not ready yet, retrying in 5 seconds...");
+    } catch (err) {
+      console.log("Stream not ready yet, retrying in 5 seconds...");
+    }
+
+    await new Promise(resolve => setTimeout(resolve, 5000));
+  }
+}
+
 // ── UPDATED: Uses WHEP stream instead of physical camera ─────────────────────
 async function startLocalVideo() {
   setStatus("Getting WHEP stream...");
@@ -237,36 +264,7 @@ hangupBtn.onclick = async () => {
   }
 };
 
-
-
-/*window.addEventListener("load", async () => {
-  try {
-    const stream = await getWhepStream();
-    console.log("✅ WHEP stream obtained");
-    console.log("Tracks:", stream.getTracks());
-
-    const testVideo = document.createElement('video');
-    testVideo.srcObject = stream;
-    testVideo.autoplay = true;
-    testVideo.muted = true;
-    testVideo.style.width = '320px';
-    testVideo.style.border = '2px solid green';
-    document.body.appendChild(testVideo);
-
-    console.log("✅ Video element added");
-  } catch (err) {
-    console.error("❌ WHEP failed:", err.message);
-  }
-});*/
-
-// REPLACE with this:
-joinBtn.onclick = async () => {
-  await joinCall();
-};
-
-/*window.addEventListener("load", async () => {
-  // Simulate user interaction to satisfy autoplay policy
-  document.body.click();
-  await joinCall();
-});*/
-
+window.addEventListener("load", async () => {
+  await waitForStream(); // wait until stream is available
+  await joinCall();      // then join the call
+});
