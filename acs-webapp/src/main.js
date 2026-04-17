@@ -97,6 +97,31 @@ async function waitForStream() {
   }
 }
 
+// This function monitors the stream in case the stream dies mid call.
+async function monitorStream() {
+  const videoTrack = localVideoStream?.mediaStream?.getVideoTracks()[0];
+
+  if (!videoTrack) return;
+
+  videoTrack.onended = async () => {
+    console.log("⚠️ Stream lost, waiting for stream to return...");
+    
+    await waitForStream();
+    
+    console.log("✅ Stream returned, resuming video...");
+    
+    const newStream = await getWhepStream();
+    const newLocalVideoStream = new LocalVideoStream(newStream);
+    
+    await call.stopVideo(localVideoStream);
+    await call.startVideo(newLocalVideoStream);
+    
+    localVideoStream = newLocalVideoStream;
+    
+    console.log("✅ Video resumed in Teams call");
+  };
+}
+
 // ── UPDATED: Uses WHEP stream instead of physical camera ─────────────────────
 async function startLocalVideo() {
   setStatus("Getting WHEP stream...");
@@ -136,7 +161,6 @@ async function joinCall() {
       displayName: "MedView"
     });
 
-// ── deviceManager block removed ──────────────────────────────────────────
     setStatus("Starting local video...");
     await startLocalVideo();
 
@@ -144,6 +168,10 @@ async function joinCall() {
     const locator = { meetingLink: MEETING_LINK };
 
     call = callAgent.join(locator, {
+      audioOptions:{
+        muted: false
+      },
+
       videoOptions: {
         localVideoStreams: [localVideoStream],
         constraints: {
@@ -153,6 +181,14 @@ async function joinCall() {
         }
       }
     });
+
+    // After joining the call, the stream will be monitored
+    call.on('stateChanged', async () => {
+      if (call.state === 'Connected') {
+        await monitorStream();
+      }
+    });
+
     // ── Diagnostics ──────────────────────────────────────────────────────────────
     call.on('stateChanged', () => {
       console.log('📞 CALL STATE:', call.state);
@@ -264,7 +300,15 @@ hangupBtn.onclick = async () => {
   }
 };
 
+// When the browser page loads, wait and poll the stream until its available
 window.addEventListener("load", async () => {
   await waitForStream(); // wait until stream is available
   await joinCall();      // then join the call
+});
+
+// When the Pi 5 powers off, hang up the call
+window.addEventListener('beforeunload', async () => {
+  if (call) {
+    await call.hangUp({ forEveryone: false });
+  }
 });
